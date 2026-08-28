@@ -1,0 +1,105 @@
+services:
+  discordbot:
+    container_name: discordbot
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - path: ./.env
+        required: false
+    environment:
+      MUSIC_DIR: /music
+      IDLE_TIMEOUT: ${DISCORDBOT_IDLE_TIMEOUT:-300}
+      YOUTUBE_API_KEY: ${DISCORDBOT_YOUTUBE_API_KEY:-}
+      LLM_CHAT_MODEL: ${DISCORDBOT_LLM_CHAT_MODEL:-}
+      LLM_API_BASE_URL: ${DISCORDBOT_LLM_API_BASE_URL:-https://llm.example.com}
+      WEB_PORT: "8080"
+      WEB_API_KEY: ${DISCORDBOT_WEB_API_KEY:-}
+      WEB_PASSWORD: ${DISCORDBOT_WEB_PASSWORD:-}
+      # Discord OAuth for the dashboard. The redirect must match a redirect URI
+      # registered on the Discord application exactly. Unset all three to fall
+      # back to WEB_PASSWORD only.
+      DISCORD_CLIENT_ID: ${DISCORDBOT_DISCORD_CLIENT_ID:-}
+      DISCORD_CLIENT_SECRET: ${DISCORDBOT_DISCORD_CLIENT_SECRET:-}
+      DISCORD_REDIRECT_URI: ${DISCORDBOT_DISCORD_REDIRECT_URI:-https://${DISCORDBOT_DOMAIN:-bot.example.com}/api/auth/discord/callback}
+      # Persist yt-dlp cache (EJS challenge-solver script + youtube sigfuncs) on
+      # the /data mount so it isn't re-downloaded from github on every restart.
+      XDG_CACHE_HOME: /data/.cache
+      # cogs/games.py — /palworld start|status. Reaches the dashboard-power
+      # sidecar over dashboard-internal (below); the bot never gets
+      # docker.sock itself. Unset to disable the cog.
+      POWER_URL: ${DISCORDBOT_POWER_URL:-http://dashboard-power:8080}
+      POWER_SERVICE: ${DISCORDBOT_POWER_SERVICE:-palworld}
+      # Optional Discord role gate; an alternative to the per-user allowlist.
+      POWER_ROLE: ${DISCORDBOT_POWER_ROLE:-}
+      POWER_ADMINS: ${DISCORDBOT_POWER_ADMINS:-}
+      # /palworld players — Palworld's own REST API. Both containers are on
+      # `web`, so this is a direct call; dashboard-power stays start/stop-only.
+      PALWORLD_REST_URL: ${DISCORDBOT_PALWORLD_REST_URL:-http://palworld:8212}
+      PALWORLD_ADMIN_PASSWORD: ${DISCORDBOT_PALWORLD_ADMIN_PASSWORD:-}
+      # /palworld connect — fallback only; the command looks up the live public
+      # IP at call time, because Palworld's client rejects hostnames in the
+      # "Join with IP" box. Do NOT put a hostname here expecting it to work.
+      PALWORLD_CONNECT_HOST: ${DISCORDBOT_PALWORLD_CONNECT_HOST:-203.0.113.10}
+      PALWORLD_CONNECT_PORT: ${DISCORDBOT_PALWORLD_CONNECT_PORT:-8211}
+      PALWORLD_SERVER_PASSWORD: ${DISCORDBOT_PALWORLD_SERVER_PASSWORD:-}
+      PALWORLD_SERVER_NAME: ${DISCORDBOT_PALWORLD_SERVER_NAME:-The Whip}
+    volumes:
+      - ${DISCORDBOT_MUSIC_DIR_HOST:-/home/ween/share/media/music}:/music
+      - ${DISCORDBOT_DATA_DIR_HOST:-/home/ween/.musicbot-data}:/data
+    networks:
+      - web
+      # dashboard-power was taken off `web` on 2026-08-03 (no auth of its own,
+      # owns docker.sock), so this is now the only route to it.
+      - dashboard-internal
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=web
+      - traefik.http.services.discordbot-api.loadbalancer.server.port=8080
+      - traefik.http.routers.discordbot-api.rule=Host(`${DISCORDBOT_DOMAIN:-bot.example.com}`) && PathPrefix(`/api`)
+      - traefik.http.routers.discordbot-api.entrypoints=websecure
+      - traefik.http.routers.discordbot-api.tls=true
+      - traefik.http.routers.discordbot-api.tls.certresolver=letsencrypt
+      # Public access: Discord OAuth (or WEB_PASSWORD) gates the API.
+      - traefik.http.routers.discordbot-api.service=discordbot-api
+      - traefik.http.routers.discordbot-api.priority=20
+
+  discordbot-web:
+    container_name: discordbot-web
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      # No VITE_API_BASE_URL: the SPA and API are same-origin behind Traefik, so
+      # the client uses relative /api/* paths directly.
+    restart: unless-stopped
+    mem_limit: 128m
+    depends_on:
+      - discordbot
+    networks:
+      - web
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=web
+      - traefik.http.services.discordbot-web.loadbalancer.server.port=5173
+      - traefik.http.routers.discordbot.rule=Host(`${DISCORDBOT_DOMAIN:-bot.example.com}`)
+      - traefik.http.routers.discordbot.entrypoints=websecure
+      - traefik.http.routers.discordbot.tls=true
+      - traefik.http.routers.discordbot.tls.certresolver=letsencrypt
+      # Public access: SPA is served to anyone; API behind password login.
+      - traefik.http.routers.discordbot.service=discordbot-web
+      # Must sit ABOVE traefik's `offline` fallback (priority 2 in
+      # services/traefik/dynamic.yml) or the SPA root serves the "Service
+      # offline" 503 while /api still works. Must stay BELOW discordbot-api
+      # (20) so /api keeps reaching the bot rather than the static site.
+      - traefik.http.routers.discordbot.priority=10
+
+networks:
+  web:
+    external: true
+    name: web
+  # Declared identically in apps/dashboard/docker-compose.yml; both are merged
+  # into the same `services` compose project, so this resolves to that one
+  # network rather than creating a second.
+  dashboard-internal:
+    internal: true

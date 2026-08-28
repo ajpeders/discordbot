@@ -1,0 +1,55 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    # Pin the runtime with a job container rather than actions/setup-python.
+    # setup-python cannot work on this runner: jobs are gVisor-sandboxed with an
+    # empty tool cache, so the action tries to download a runtime and fails with
+    # "The version '3.12' ... was not found for this operating system".
+    container: python:3.12
+    steps:
+      # actions/checkout is a JS action and this image has no node, so check out
+      # by hand (same as gym-app). forgejo:3000 over plain http -- the CI network
+      # can't reach github.com.
+      - name: checkout
+        env:
+          TOKEN: ${{ github.token }}
+        run: |
+          git init -q .
+          git remote add origin "http://token:${TOKEN}@forgejo:3000/${GITHUB_REPOSITORY}.git"
+          git fetch -q --depth 1 origin "$GITHUB_SHA"
+          git checkout -q FETCH_HEAD
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Python syntax check
+        run: python3 -m compileall -q bot.py config.py cogs/ music/ tests/ web/
+      - name: Python lint
+        run: ruff check .
+      - name: Tests
+        run: python -m pytest -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    # Same reason as above — actions/setup-node is unusable here. Note the
+    # runner's default image is node:20, so the version must come from this
+    # container, not from a setup step.
+    container: node:22
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: frontend
+      - name: Frontend lint
+        run: npm run lint
+        working-directory: frontend
+      - name: Frontend tests
+        run: npm test -- --run
+        working-directory: frontend
+      - name: Frontend build
+        run: npm run build
+        working-directory: frontend

@@ -1,0 +1,39 @@
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+
+[tool.ruff.lint]
+# Correctness-focused. Deliberately excludes the large mechanical rewrites
+# (UP045 Optional[X] -> X | None, E501 line length) so lint stays a bug
+# detector rather than a source of churn.
+select = ["E4", "E7", "E9", "F", "B", "ASYNC", "SIM", "RUF"]
+ignore = [
+    # Blind excepts are intentional at the source/handler boundaries: a single
+    # bad track or request must never take the bot down. They all log.
+    "BLE001",
+    # Both flagged lambdas are awaited within the same loop iteration, so the
+    # late-binding this rule guards against cannot occur.
+    "B023",
+    # Remaining hits are single stat() calls and chunked writes to local disk
+    # in the upload/download paths — bounded and sub-millisecond. The one call
+    # that genuinely stalled the loop (walking the whole music library) now
+    # runs in an executor; see _scan_music_dir in web/server.py.
+    "ASYNC230",
+    "ASYNC240",
+    # Style, not correctness. Left off so lint stays a signal rather than a
+    # source of churn on working code.
+    "SIM102",
+    "SIM105",
+    "SIM108",
+    "SIM117",
+    "B007",
+    # En dashes and ellipses in user-facing strings are deliberate.
+    "RUF001",
+    "RUF003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["RUF059"]

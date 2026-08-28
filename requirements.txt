@@ -1,0 +1,9 @@
+discord.py[voice]
+aiohttp
+# Unpinned on purpose: YouTube breaks extractors regularly, so a stale pin is a
+# guaranteed outage. A rebuild refreshes it.
+yt-dlp
+python-dotenv
+pytest
+pytest-asyncio
+ruff
